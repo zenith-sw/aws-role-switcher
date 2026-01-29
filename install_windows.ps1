@@ -7,7 +7,7 @@ $installDir = "$HOME\.sw\bin"
 if (!(Test-Path $installDir)) { New-Item -ItemType Directory -Force -Path $installDir }
 $dest = "$installDir\sw.exe"
 
-$url = "https://github.com/zenith-sw/util-aws-role-switcher/releases/latest/download/sw_windows_amd64.exe"
+$url = "https://github.com/zenith-sw/aws-role-switcher/releases/latest/download/sw_windows_amd64.exe"
 $dest = "C:\Windows\System32\sw.exe"
 
 Write-Host "Downloading AWS STS Role Switcher for Windows..."
