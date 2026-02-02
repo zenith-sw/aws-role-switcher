@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"os/exec"
 	"runtime"
 	"path/filepath"
 	"strings"
@@ -63,6 +64,39 @@ func loadConfigAndCheckUser() ([]ProfileConfig, error) {
 	}
 
 	return cfg, nil
+}
+
+func getSTSCredentials(targetAlias string) (*sts.AssumeRoleOutput, string) {
+    profiles, err := loadConfigAndCheckUser()
+    if err != nil { log.Fatal(err) }
+
+    role, ok := profiles[0].AssumeRoles[targetAlias]
+    if !ok { log.Fatalf("'%s' role not found", targetAlias) }
+
+    os.Unsetenv("AWS_ACCESS_KEY_ID")
+    os.Unsetenv("AWS_SECRET_ACCESS_KEY")
+    os.Unsetenv("AWS_SESSION_TOKEN")
+
+    ctx := context.TODO()
+    var opts []func(*config.LoadOptions) error
+    if role.Region != "" {
+        opts = append(opts, config.WithRegion(role.Region))
+    }
+
+    cfg, err := config.LoadDefaultConfig(ctx, opts...)
+    if err != nil { log.Fatalf("Unable to load SDK config: %v", err) }
+    
+    stsClient := sts.NewFromConfig(cfg)
+    sessionName := fmt.Sprintf("%s-%s", profiles[0].Name, targetAlias)
+    
+    res, err := stsClient.AssumeRole(ctx, &sts.AssumeRoleInput{
+        RoleArn:         &role.Arn,
+        RoleSessionName: &sessionName,
+        DurationSeconds: &profiles[0].Duration,
+    })
+    if err != nil { log.Fatalf("Role switching failed: %v", err) }
+
+    return res, role.Region
 }
 
 // --- Commands ---
@@ -169,72 +203,69 @@ var addCmd = &cobra.Command{
 
 var setupCmd = &cobra.Command{
 	Use:   "setup [alias]",
-	Short: "Get temporary credentials",
+	Short: "Copy credentials to clipboard",
+	Long: "Retrieves temporary credentials and copies them to your clipboard for manual use in your current terminal session.",
 	Args:  cobra.ExactArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
 		targetAlias := args[0]
-		profiles, err := loadConfigAndCheckUser()
-		if err != nil {
-			fmt.Println(err)
-			return
-		}
-
-		role, ok := profiles[0].AssumeRoles[targetAlias]
-		if !ok {
-			log.Fatalf("'%s' role not found", targetAlias)
-		}
-
-		os.Unsetenv("AWS_ACCESS_KEY_ID")
-		os.Unsetenv("AWS_SECRET_ACCESS_KEY")
-		os.Unsetenv("AWS_SESSION_TOKEN")
-
-		ctx := context.TODO()
-		var opts []func(*config.LoadOptions) error
-		if role.Region != "" {
-            opts = append(opts, config.WithRegion(role.Region))
-        }
-
-		cfg, err := config.LoadDefaultConfig(ctx, opts...)
-        if err != nil {
-            log.Fatalf("Unable to load SDK config: %v", err)
-        }
-		
-		stsClient := sts.NewFromConfig(cfg)
-
-		sessionName := fmt.Sprintf("%s-%s", profiles[0].Name, targetAlias)
-		res, err := stsClient.AssumeRole(ctx, &sts.AssumeRoleInput{
-			RoleArn:         &role.Arn,
-			RoleSessionName: &sessionName,
-			DurationSeconds: &profiles[0].Duration,
-		})
-		if err != nil {
-			log.Fatalf("Role switching failed: %v", err)
-		}
+        res, region := getSTSCredentials(targetAlias)
 
 		var output string
     	if runtime.GOOS == "windows" {
-			// 💡 윈도우(PowerShell)는 세미콜론(;)으로 연결해야 붙여넣었을 때 한 줄로 인식되어 바로 실행됩니다.
 			output = fmt.Sprintf(
-				"$env:AWS_ACCESS_KEY_ID=\"%s\"; $env:AWS_SECRET_ACCESS_KEY=\"%s\"; $env:AWS_SESSION_TOKEN=\"%s\"",
-				*res.Credentials.AccessKeyId, *res.Credentials.SecretAccessKey, *res.Credentials.SessionToken,
-			)
-			if role.Region != "" {
-				output += fmt.Sprintf("; $env:AWS_REGION=\"%s\"", role.Region)
-			}
+                "$env:AWS_ACCESS_KEY_ID=\"%s\"; $env:AWS_SECRET_ACCESS_KEY=\"%s\"; $env:AWS_SESSION_TOKEN=\"%s\"",
+                *res.Credentials.AccessKeyId, *res.Credentials.SecretAccessKey, *res.Credentials.SessionToken,
+            )
+            if region != "" {
+                output += fmt.Sprintf("; $env:AWS_REGION=\"%s\"", region)
+            }
 		} else {
-			// macOS/Linux(Bash, Zsh)는 개행(\n)으로 구분해도 잘 작동합니다.
 			output = fmt.Sprintf(
 				"export AWS_ACCESS_KEY_ID=%s\nexport AWS_SECRET_ACCESS_KEY=%s\nexport AWS_SESSION_TOKEN=%s",
 				*res.Credentials.AccessKeyId, *res.Credentials.SecretAccessKey, *res.Credentials.SessionToken,
 			)
-			if role.Region != "" {
-				output += fmt.Sprintf("\nexport AWS_REGION=%s", role.Region)
+			if region != "" {
+				output += fmt.Sprintf("\nexport AWS_REGION=%s", region)
 			}
 		}
 
 		clipboard.WriteAll(output)
     	fmt.Printf("[%s] credentials copied! Paste and execute in your terminal.\n", targetAlias)
 	},
+}
+
+var runCmd = &cobra.Command{
+    Use:   "run [alias] -- [command]",
+    Short: "Run a command with temporary credentials",
+    Long: `Executes a command in a secure subshell with credentials automatically injected, leaving your main environment clean.
+		Usage Example:
+		- sw run {profile} -- {your_command}
+  		- sw run {profile} -- {your_script.sh}`,
+    Args:  cobra.MinimumNArgs(2),
+    Run: func(cmd *cobra.Command, args []string) {
+        res, region := getSTSCredentials(args[0])
+        
+        commandName := args[1]
+        commandArgs := args[2:]
+
+        c := exec.Command(commandName, commandArgs...)
+        
+        env := os.Environ()
+        env = append(env, fmt.Sprintf("AWS_ACCESS_KEY_ID=%s", *res.Credentials.AccessKeyId))
+        env = append(env, fmt.Sprintf("AWS_SECRET_ACCESS_KEY=%s", *res.Credentials.SecretAccessKey))
+        env = append(env, fmt.Sprintf("AWS_SESSION_TOKEN=%s", *res.Credentials.SessionToken))
+        env = append(env, fmt.Sprintf("AWS_REGION=%s", region))
+        
+        c.Env = env
+        c.Stdout = os.Stdout
+        c.Stderr = os.Stderr
+        c.Stdin = os.Stdin
+
+        fmt.Printf("Running: %s %v\n", commandName, commandArgs)
+        if err := c.Run(); err != nil {
+            log.Fatalf("Execution failed: %v", err)
+        }
+    },
 }
 
 var listCmd = &cobra.Command{
@@ -294,7 +325,7 @@ var deleteCmd = &cobra.Command{
 }
 
 func main() {
-	rootCmd.AddCommand(initCmd, setupCmd, addCmd, listCmd, deleteCmd)
+	rootCmd.AddCommand(initCmd, setupCmd, runCmd, addCmd, listCmd, deleteCmd)
 	if err := rootCmd.Execute(); err != nil {
 		os.Exit(1)
 	}
