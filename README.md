@@ -22,9 +22,9 @@ Just define your roles and switch in a second.
 <br/>
 
 ## Installation
-**macOS:**  
+**mac/linux:**  
 ```bash
-curl -fsSL https://raw.githubusercontent.com/zenith-sw/aws-role-switcher/main/install_mac.sh | bash
+curl -fsSL https://raw.githubusercontent.com/zenith-sw/aws-role-switcher/main/install.sh | bash
 ```
 
 **Windows:**
@@ -77,4 +77,13 @@ GOOS=darwin GOARCH=arm64 go build -o sw_darwin_arm64 main.go
 **Windows:**
 ```powershell
 GOOS=windows GOARCH=amd64 go build -o sw_windows_amd64.exe main.go
+```
+
+**linuxOS:**  
+```bash
+CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -a -ldflags '-s -w' -o sw_linux_amd64 main.go
+```
+
+```bash
+CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -a -ldflags '-s -w' -o sw_linux_arm64 main.go
 ```
