@@ -51,7 +51,7 @@ fi
 echo "Initializing configuration..."
 "$INSTALL_DEST" init
 
-echo -e "\n${CYAN}-----${NC}"
+echo -e "\n${CYAN}------------------------------------------${NC}"
 echo -e "${GREEN}Installation Complete!${NC}"
-echo "Register your first role using 'sw add'"
-echo -e "${CYAN}-----${NC}"
+echo -e "Register your first role using: ${YELLOW}sw add${NC}"
+echo -e "${CYAN}------------------------------------------${NC}"
